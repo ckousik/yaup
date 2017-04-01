@@ -134,11 +134,11 @@ func (d *Dialer) verifyResponse(res *http.Response) bool {
 }
 
 func (d *Dialer) establishSession(req *http.Request, done chan sessionResponse, errChan chan error) {
-	deadline := time.Now().Add(d.TCPTimeout)
+	timeout := d.TCPTimeout
 	if d.TCPTimeout == 0 {
-		deadline = time.Now().Add(DefaultTCPTimeout)
+		timeout = DefaultTCPTimeout
 	}
-	dial := (&net.Dialer{Deadline: deadline}).Dial
+	dial := (&net.Dialer{Timeout: timeout}).Dial
 	conn, err := dial("tcp", addPort(req.URL.Host))
 	if err != nil {
 		errChan <- err
