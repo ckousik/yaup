@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"github.com/hashicorp/yamux"
-	// "log"
 	"net"
 	"net/http"
 	"net/url"
@@ -27,6 +26,12 @@ var (
 
 	// ErrHandshakeTimeout ...
 	ErrHandshakeTimeout = fmt.Errorf("handshake timed out")
+
+	// DefaultTimeout ...
+	DefaultTimeout = 10 * time.Second
+
+	// DefaultTCPTimeout ...
+	DefaultTCPTimeout = 3 * time.Minute
 )
 
 func parseURL(str string) (*url.URL, error) {
@@ -69,10 +74,20 @@ Dialer ...
 type Dialer struct {
 	// HandshakeTimeout ...
 	HandshakeTimeout time.Duration
-	Config           *yamux.Config
+
+	// TCPTimeout ...
+	TCPTimeout time.Duration
+
+	// Config ...
+	Config *yamux.Config
 
 	//Jar ...
 	Jar http.CookieJar
+}
+
+type sessionResponse struct {
+	s *yamux.Session
+	r *http.Response
 }
 
 func (d *Dialer) generateRequest(u *url.URL, header http.Header) (*http.Request, error) {
@@ -118,13 +133,13 @@ func (d *Dialer) verifyResponse(res *http.Response) bool {
 	return true
 }
 
-type sessionResponse struct {
-	s *yamux.Session
-	r *http.Response
-}
-
 func (d *Dialer) establishSession(req *http.Request, done chan sessionResponse, errChan chan error) {
-	conn, err := net.Dial("tcp", addPort(req.URL.Host))
+	deadline := time.Now().Add(d.TCPTimeout)
+	if d.TCPTimeout == 0 {
+		deadline = time.Now().Add(DefaultTCPTimeout)
+	}
+	dial := (&net.Dialer{Deadline: deadline}).Dial
+	conn, err := dial("tcp", addPort(req.URL.Host))
 	if err != nil {
 		errChan <- err
 		return
@@ -183,7 +198,7 @@ func (d *Dialer) Dial(urlStr string, header http.Header) (*yamux.Session, *http.
 	ec := make(chan error)
 
 	if d.HandshakeTimeout == 0 {
-		d.HandshakeTimeout = 10 * time.Second
+		d.HandshakeTimeout = DefaultTimeout
 	}
 
 	go d.establishSession(req, done, ec)
