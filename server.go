@@ -15,18 +15,20 @@ var (
 	ErrNoHijack = fmt.Errorf("webserver doesn't support hijacking")
 )
 
-// IsYamuxUpgrade ...
-func IsYamuxUpgrade(req *http.Request) bool {
-	get := (req.Method == "GET")
-	upgrade := (req.Header.Get("Upgrade") == "yamux")
-	connection := (req.Header.Get("Connection") == "Upgrade")
-	version := req.ProtoMajor == 1 && req.ProtoMinor == 1
-	return get && upgrade && connection && version
+// IsUpgradeRequest ...
+func IsUpgradeRequest(req *http.Request) bool {
+	if req.Method != http.MethodGet ||
+		req.Header.Get("Upgrade") != "yamux" ||
+		req.Header.Get("Connection") != "Upgrade" ||
+		req.ProtoMajor != 1 || req.ProtoMinor != 1 {
+		return false
+	}
+	return true
 }
 
 // Upgrade ...
 func Upgrade(w http.ResponseWriter, r *http.Request) (*yamux.Session, error) {
-	if !IsYamuxUpgrade(r) {
+	if !IsUpgradeRequest(r) {
 		return nil, ErrNotUpgradeReq
 	}
 	// Hijack connection
