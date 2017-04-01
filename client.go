@@ -24,6 +24,9 @@ var (
 
 	// ErrBadHandshake ...
 	ErrBadHandshake = fmt.Errorf("bad handshake")
+
+	// ErrHandshakeTimeout ...
+	ErrHandshakeTimeout = fmt.Errorf("handshake timed out")
 )
 
 func parseURL(str string) (*url.URL, error) {
@@ -66,6 +69,7 @@ Dialer ...
 type Dialer struct {
 	// HandshakeTimeout ...
 	HandshakeTimeout time.Duration
+	Config           *yamux.Config
 
 	//Jar ...
 	Jar http.CookieJar
@@ -103,6 +107,66 @@ func (d *Dialer) generateRequest(u *url.URL, header http.Header) (*http.Request,
 	return req, nil
 }
 
+func (d *Dialer) verifyResponse(res *http.Response) bool {
+	if res.StatusCode != 101 ||
+		res.ProtoMajor != 1 ||
+		res.ProtoMinor != 1 ||
+		res.Header.Get("Upgrade") != "yamux" ||
+		res.Header.Get("Connection") != "Upgrade" {
+		return false
+	}
+	return true
+}
+
+type sessionResponse struct {
+	s *yamux.Session
+	r *http.Response
+}
+
+func (d *Dialer) establishSession(req *http.Request, done chan sessionResponse, errChan chan error) {
+	conn, err := net.Dial("tcp", addPort(req.URL.Host))
+	if err != nil {
+		errChan <- err
+		return
+	}
+
+	defer func() {
+		if conn != nil {
+			_ = conn.Close()
+		}
+	}()
+
+	if err = req.Write(conn); err != nil {
+		errChan <- err
+		return
+	}
+
+	session, err := yamux.Server(conn, d.Config)
+	if err != nil {
+		errChan <- err
+		return
+	}
+
+	stream, err := session.Accept()
+	if err != nil {
+		errChan <- err
+		return
+	}
+
+	sr := bufio.NewReader(stream)
+	res, err := http.ReadResponse(sr, req)
+	if err != nil {
+		errChan <- err
+		return
+	}
+	if !d.verifyResponse(res) {
+		errChan <- ErrBadHandshake
+		return
+	}
+	conn = nil
+	done <- sessionResponse{s: session, r: res}
+}
+
 // Dial ...
 func (d *Dialer) Dial(urlStr string, header http.Header) (*yamux.Session, *http.Response, error) {
 	u, err := parseURL(urlStr)
@@ -115,42 +179,21 @@ func (d *Dialer) Dial(urlStr string, header http.Header) (*yamux.Session, *http.
 		return nil, nil, err
 	}
 
-	var deadline time.Time
-	if d.HandshakeTimeout != time.Duration(0) {
-		deadline = time.Now().Add(d.HandshakeTimeout)
+	done := make(chan sessionResponse)
+	ec := make(chan error)
+
+	if d.HandshakeTimeout == 0 {
+		d.HandshakeTimeout = 10 * time.Second
 	}
 
-	dial := (&net.Dialer{Deadline: deadline}).Dial
-	conn, err := dial("tcp", addPort(u.Host))
-	if err != nil {
-		return nil, nil, err
-	}
-	// close connection if something goes wrong at the end
-	defer func() {
-		if conn != nil {
-			_ = conn.Close()
-		}
-	}()
-	// Write request over connection
-	if err = req.Write(conn); err != nil {
-		return nil, nil, err
-	}
-	// Open server
-	session, err := yamux.Server(conn, nil)
-	if err != nil {
-		return nil, nil, err
-	}
+	go d.establishSession(req, done, ec)
 
-	connReader := bufio.NewReader(conn)
-	res, err := http.ReadResponse(connReader, nil)
-	if err != nil {
-		_ = session.Close()
+	select {
+	case sres := <-done:
+		return sres.s, sres.r, nil
+	case err = <-ec:
 		return nil, nil, err
+	case <-time.After(d.HandshakeTimeout):
+		return nil, nil, ErrHandshakeTimeout
 	}
-	if res.Header.Get("Upgrade") != "yamux" {
-		_ = session.Close()
-		return nil, nil, ErrBadHandshake
-	}
-	conn = nil
-	return session, nil, nil
 }

@@ -1,9 +1,9 @@
 package yaup
 
 import (
+	"bufio"
 	"fmt"
 	"github.com/hashicorp/yamux"
-	// "io"
 	"net/http"
 )
 
@@ -38,7 +38,7 @@ func Upgrade(w http.ResponseWriter, r *http.Request) (*yamux.Session, error) {
 		return nil, ErrNoHijack
 	}
 
-	conn, brw, err := h.Hijack()
+	conn, _, err := h.Hijack()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return nil, err
@@ -48,12 +48,19 @@ func Upgrade(w http.ResponseWriter, r *http.Request) (*yamux.Session, error) {
 		return nil, err
 	}
 
+	stream, err := session.Open()
+	if err != nil {
+		return nil, err
+	}
+
+	brw := bufio.NewWriter(stream)
+
 	_, err = brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: yamux\r\nConnection: Upgrade\r\n\r\n")
-	_ = brw.Flush()
 	if err != nil {
 		_ = session.Close()
 		return nil, err
 	}
+	_ = brw.Flush()
 
 	return session, nil
 }
