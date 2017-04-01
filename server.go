@@ -27,7 +27,7 @@ func IsUpgradeRequest(req *http.Request) bool {
 }
 
 // Upgrade ...
-func Upgrade(w http.ResponseWriter, r *http.Request) (*yamux.Session, error) {
+func Upgrade(w http.ResponseWriter, r *http.Request, header http.Header, config *yamux.Config) (*yamux.Session, error) {
 	if !IsUpgradeRequest(r) {
 		return nil, ErrNotUpgradeReq
 	}
@@ -43,7 +43,7 @@ func Upgrade(w http.ResponseWriter, r *http.Request) (*yamux.Session, error) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return nil, err
 	}
-	session, err := yamux.Client(conn, nil)
+	session, err := yamux.Client(conn, config)
 	if err != nil {
 		return nil, err
 	}
@@ -54,13 +54,33 @@ func Upgrade(w http.ResponseWriter, r *http.Request) (*yamux.Session, error) {
 	}
 
 	brw := bufio.NewWriter(stream)
+	resbuf := []byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: yamux\r\nConnection: Upgrade\r\n")
+	for k, vs := range header {
+		if k == "Connection" || k == "Upgrade" {
+			return nil, ErrNoDuplicateHeaders
+		}
+		resbuf = append(resbuf, k...)
+		resbuf = append(resbuf, ": "...)
+		// Split on control character
+		for _, v := range vs {
+			for i, _ := range v {
+				b := v[i]
+				// Unit separator control character
+				if b <= 31 {
+					b = ' '
+				}
+				resbuf = append(resbuf, b)
+			}
+		}
+		resbuf = append(resbuf, "\r\n"...)
+	}
+	resbuf = append(resbuf, "\r\n"...)
 
-	_, err = brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: yamux\r\nConnection: Upgrade\r\n\r\n")
+	// Write response with added headers
+	_, err = brw.Write(resbuf)
 	if err != nil {
-		_ = session.Close()
 		return nil, err
 	}
 	_ = brw.Flush()
-
 	return session, nil
 }

@@ -8,7 +8,7 @@ import (
 
 func init() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		session, err := Upgrade(w, r)
+		session, err := Upgrade(w, r, nil, nil)
 		if err != nil {
 			panic(err)
 		}
